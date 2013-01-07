@@ -41,10 +41,10 @@ class Rdesiak
     operation = nil
     results = []
     q.each do |s|
-      p s.class
+      #p s.class
       if s.class == Array
         results = partial_triple(*s)
-        p results
+        #p results
       elsif s.class == Symbol
         operation = s
       end
@@ -73,7 +73,31 @@ class Rdesiak
   end
 
   def edge(edge_label)
-    @rdesiak.get(edge_id(edge_label)).data
+#    @rdesiak.get(edge_id(edge_label)).data
+    edge_by_id(edge_id(edge_label)).data
+  end
+
+  def edge_by_id(edge_id)
+    #puts "edge_by_id #{edge_id}"
+    @rdesiak.get(edge_id).data
+  end
+
+  def edge_label_by_id(edge_id)
+    edge_by_id(edge_id)['label']
+  end
+
+  def vertex(vertex_label)
+#    @rdesiak.get(vertex_id(vertex_label)).data
+    vertex_by_id(vertex_id(vertex_label))
+  end
+
+  def vertex_by_id(vertex_id)
+    #puts "vertex_by_id: #{vertex_id}"
+    @rdesiak.get(vertex_id).data
+  end
+
+  def vertex_label_by_id(vertex_id)
+    vertex_by_id(vertex_id)['label']
   end
 
   def has_edge?(edge_label)
@@ -100,37 +124,64 @@ class Rdesiak
     end
   end
 
+  def adjacencies(id, field1, field2, graph)
+    o = @rdesiak.get(id)
+    if o.data['graphs'].include? graph
+      return o.data[field1], o.data[field2]
+    else
+      return [],[]
+    end
+  end
+
   def partial_triple(vi, e, vo, graph = "<>")
-    puts "partial_triple #{vi.class}, #{e.class}, #{vo.class}"
+    #puts "partial_triple #{vi.class}, #{e.class}, #{vo.class}"
     if    (vi.class == Symbol) && (e.class == Symbol) && (vo.class == Symbol)
       # all triples
     elsif (vi.class == Symbol) && (e.class == Symbol) && (vo.class != Symbol)
       # only the out vertex is constrained
       edges_in(vo, graph).collect {|edge| 
-#        puts "edge: #{edge}"
         adjacency(edge, 'vertices_in', graph).collect { |vertex|
-#          puts "vertex: #{vertex}"
-          [vertex, edge, vo] 
+          [vertex_label_by_id(vertex), edge_label_by_id(edge), vo] 
         }
       }.flatten(1)
     elsif (vi.class == Symbol) && (e.class != Symbol) && (vo.class == Symbol)
       # only the edge is constrained
-      puts "edge: #{edge_id(e)}"
-      adjacency(edge_id(e), 'vertices_in', graph).collect { |evi|
-        puts "vertex_in: #{evi}"
-        adjacency(edge_id(e), 'vertices_out', graph).collect { |evo|
-          puts "vertex_out: #{evo}"
-          [evi, edge_id(e), evo]
-        }
-      }.flatten(1)
+      e_id = edge_id(e)
+#      puts "edge: #{e_id}"
+      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
+      evia.collect { |evi| evoa.collect { |evo|
+          [vertex_label_by_id(evi), e, vertex_label_by_id(evo)]
+        } }.flatten(1)
     elsif (vi.class == Symbol) && (e.class != Symbol) && (vo.class != Symbol)
       []
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class == Symbol)
       []
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class != Symbol)
-      []
+      evi = vertex_id(vi)
+      evo = vertex_id(vo)
+      a = edges_in(vo, graph).collect { |edge| 
+        adjacency(edge, 'vertices_in', graph).collect { |vertex|
+          #puts "vertex: #{vertex} vs #{evi}"
+          if (evi == vertex)
+            [vi, edge_label_by_id(edge), vo]
+          else
+            nil
+          end
+        }
+      }
+      #puts a
+      (a.select {|x| x != [nil] }).flatten(1)
     elsif (vi.class != Symbol) && (e.class != Symbol) && (vo.class == Symbol)
-      []
+      e_id = edge_id(e)
+      evi = vertex_id(vi) 
+      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
+      #p evia
+      #puts evi
+      if (evia.include? evi)
+        evoa.collect { |evo| [vertex_label_by_id(evi), e, vertex_label_by_id(evo)] }
+      else
+        []
+      end
     elsif (vi.class != Symbol) && (e.class != Symbol) && (vo.class != Symbol)
       []
     end
@@ -181,7 +232,7 @@ class Rdesiak
   end
 end
 
-class TestSimpleNumber < Test::Unit::TestCase
+class TestRdesiak < Test::Unit::TestCase
  
   def setup
     @rd = Rdesiak.new
@@ -235,9 +286,16 @@ class TestSimpleNumber < Test::Unit::TestCase
   end
 
   def test_query
-    assert_equal([ ["46771b5713e9494b0556dc1e52a67117b901d23c", "3e0f0bee3404055229ca5833983e3039dc39f0f1", "printf"], 
-                    ["4f0012714fe3bd0d393a3dac9188558df0934c82", "2eb2812677abb08dd6ac711ae4e3fba1bc8f2532", "printf"]
-                  ], @rd.query?([[:s, :p, 'printf']]))
+    assert_equal([
+                  ["execute", "5", "printf"], ["main", "7", "printf"]
+                 ],
+                 @rd.query?([[:s, :p, 'printf']]))
+    assert_equal([ 
+                  ["execute", "5", "printf"]
+                 ], @rd.query?([[:s, '5', :o]]))
+    assert_equal([["main", "2", "init"]], @rd.query?([['main', '2', :o]]))
+    assert_equal([["main", "3", "cleanup"]], @rd.query?([['main', :p, 'cleanup']]))
+    assert_equal([["main", "7", "printf"]], @rd.query?([['main', :p, 'printf']]))
   end
 
 end
@@ -255,9 +313,11 @@ rd.wipedb
   ['execute', '8', 'compare']
 ].each {|t| rd.add_triple(t[0], t[1], t[2]) }
 
-puts "query results:"
+#puts "query results:"
 #p rd.query?([[:s, :p, 'printf']])
-p rd.query?([[:s, '5', :o]])
+#p rd.query?([[:s, '5', :o]])
+#p rd.query?([['main', '2', :o]])
+#p rd.query?([['main', :p, 'printf']])
 
 #puts "query results:"
 #p rd.query?([['main', '0', :x], :and, [:x, :p, :y], :and, [:y, '5', 'printf']])
