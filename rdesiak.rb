@@ -64,6 +64,10 @@ class Rdesiak
     adjacency(edge_id(label), 'vertices_out', graph)
   end
 
+  def vertices_out_by_id(edge_id, graph = '<>')
+    adjacency(edge_id, 'vertices_out', graph)
+  end
+
   def vertices_in(label, graph = '<>')
     adjacency(edge_id(label), 'vertices_in', graph)
   end
@@ -136,7 +140,8 @@ class Rdesiak
   def partial_triple(vi, e, vo, graph = "<>")
     #puts "partial_triple #{vi.class}, #{e.class}, #{vo.class}"
     if    (vi.class == Symbol) && (e.class == Symbol) && (vo.class == Symbol)
-      # all triples
+      # do a map/reduce thingy to find all the edges and return these
+      []
     elsif (vi.class == Symbol) && (e.class == Symbol) && (vo.class != Symbol)
       # only the out vertex is constrained
       edges_in(vo, graph).collect {|edge| 
@@ -153,9 +158,23 @@ class Rdesiak
           [vertex_label_by_id(evi), e, vertex_label_by_id(evo)]
         } }.flatten(1)
     elsif (vi.class == Symbol) && (e.class != Symbol) && (vo.class != Symbol)
-      []
+      evo = vertex_id(vo)
+      e_id = edge_id(e)
+      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
+      if (evoa.include? evo)
+        evia.collect { |evi|
+          [vertex_label_by_id(evi), e, vo]
+        }
+      else
+        []
+      end
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class == Symbol)
-      []
+      evi = vertex_id(vi)
+      edges_out(vi, graph).collect { |edge|
+        vertices_out_by_id(edge, graph).collect { |evo|
+          [vertex_label_by_id(evi), edge_label_by_id(edge), vertex_label_by_id(evo)]
+        }
+      }.flatten(1)
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class != Symbol)
       evi = vertex_id(vi)
       evo = vertex_id(vo)
@@ -296,6 +315,8 @@ class TestRdesiak < Test::Unit::TestCase
     assert_equal([["main", "2", "init"]], @rd.query?([['main', '2', :o]]))
     assert_equal([["main", "3", "cleanup"]], @rd.query?([['main', :p, 'cleanup']]))
     assert_equal([["main", "7", "printf"]], @rd.query?([['main', :p, 'printf']]))
+    assert_equal([["main", "0", "parse"], ["main", "2", "init"], ["main", "3", "cleanup"], ["main", "7", "printf"]], @rd.query?([['main', :p, :o]]))
+    assert_equal([["init", "6", "make_string"]],  @rd.query?([[:s, '6', 'make_string']]))
   end
 
 end
@@ -318,6 +339,9 @@ rd.wipedb
 #p rd.query?([[:s, '5', :o]])
 #p rd.query?([['main', '2', :o]])
 #p rd.query?([['main', :p, 'printf']])
+#p rd.query?([['main', :p, :o]])
+#p rd.query?([[:s, '6', 'make_string']])
+rd.query?([[:s, :p, :o]])
 
 #puts "query results:"
 #p rd.query?([['main', '0', :x], :and, [:x, :p, :y], :and, [:y, '5', 'printf']])
