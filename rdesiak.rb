@@ -40,10 +40,8 @@ class Rdesiak
   def query?(q, &blk)
     operation = nil
     q.each do |s|
-      #p s.class
       if s.class == Array
         partial_triple(*s, &blk)
-        #p results
       elsif s.class == Symbol
         operation = s
       end
@@ -75,12 +73,10 @@ class Rdesiak
   end
 
   def edge(edge_label)
-#    @rdesiak.get(edge_id(edge_label)).data
     edge_by_id(edge_id(edge_label)).data
   end
 
   def edge_by_id(edge_id)
-    #puts "edge_by_id #{edge_id}"
     @rdesiak.get(edge_id).data
   end
 
@@ -89,12 +85,10 @@ class Rdesiak
   end
 
   def vertex(vertex_label)
-#    @rdesiak.get(vertex_id(vertex_label)).data
     vertex_by_id(vertex_id(vertex_label))
   end
 
   def vertex_by_id(vertex_id)
-    #puts "vertex_by_id: #{vertex_id}"
     @rdesiak.get(vertex_id).data
   end
 
@@ -128,11 +122,7 @@ class Rdesiak
 
   def adjacencies(id, field1, field2, graph)
     o = @rdesiak.get(id)
-    if o.data['graphs'].include? graph
-      return o.data[field1], o.data[field2]
-    else
-      return [],[]
-    end
+    yield o.data[field1], o.data[field2] if o.data['graphs'].include? graph
   end
 
   def partial_triple(vi, e, vo, graph = "<>")
@@ -143,27 +133,41 @@ class Rdesiak
 #      all_edges.collect { |edge| 
 #        map(map_phase).reduce(reduce_phase, :keep => true).run
 #      }
-      []
+      Riak.disable_list_keys_warnings = true
+      @rdesiak.keys do |k|
+        unless k.empty?
+          puts "#{k} .. #{k[/^edge/]}"
+          unless k[/^edge-/] == nil
+            adjacencies(k, 'vertices_in', 'vertices_out', graph) { |evia, evoa|
+              evia.each { |evi|
+                evoa.each { |evo|
+                  yield [evi, k, evo]
+                }
+              }
+            }
+          end
+        end
+      end
     elsif (vi.class == Symbol) && (e.class == Symbol) && (vo.class != Symbol)
-      # only the out vertex is constrained
       edges_in(vo, graph).each { |edge|
         adjacency(edge, 'vertices_in', graph).each { |vertex|
           yield [vertex_label_by_id(vertex), edge_label_by_id(edge), vo]
         }
       }
     elsif (vi.class == Symbol) && (e.class != Symbol) && (vo.class == Symbol)
-      # only the edge is constrained
-      e_id = edge_id(e)
-#      puts "edge: #{e_id}"
-      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
-      evia.collect { |evi| evoa.collect { |evo| yield [vertex_label_by_id(evi), e, vertex_label_by_id(evo)] } }
+      adjacencies(edge_id(e), 'vertices_in', 'vertices_out', graph) { |evia, evoa|
+        evia.collect { |evi| 
+          evoa.collect { |evo| 
+            yield [vertex_label_by_id(evi), e, vertex_label_by_id(evo)] 
+          }
+        }
+      }
     elsif (vi.class == Symbol) && (e.class != Symbol) && (vo.class != Symbol)
       evo = vertex_id(vo)
       e_id = edge_id(e)
-      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
-      if (evoa.include? evo)
-        evia.each { |evi| yield [ vertex_label_by_id(evi), e, vo] }
-      end
+      adjacencies(e_id, 'vertices_in', 'vertices_out', graph) { |evia, evoa|
+        evia.each { |evi| yield [ vertex_label_by_id(evi), e, vo] } if (evoa.include? evo)
+      }
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class == Symbol)
       evi = vertex_id(vi)
       edges_out(vi, graph).each { |edge|
@@ -172,24 +176,20 @@ class Rdesiak
         }
       }
     elsif (vi.class != Symbol) && (e.class == Symbol) && (vo.class != Symbol)
-      evi = vertex_id(vi)
-      evo = vertex_id(vo)
       a = edges_in(vo, graph).each { |edge| 
         adjacency(edge, 'vertices_in', graph).each { |vertex|
-          if (evi == vertex)
-            yield [vi, edge_label_by_id(edge), vo]
-          end
+          yield [vi, edge_label_by_id(edge), vo] if (vertex_id(vi) == vertex)
         }
       }
     elsif (vi.class != Symbol) && (e.class != Symbol) && (vo.class == Symbol)
-      e_id = edge_id(e)
-      evi = vertex_id(vi) 
-      evia, evoa = adjacencies(e_id, 'vertices_in', 'vertices_out', graph)
-      if (evia.include? evi)
-        evoa.each { |evo| yield [vertex_label_by_id(evi), e, vertex_label_by_id(evo)] }
-      end
+      adjacencies(edge_id(e), 'vertices_in', 'vertices_out', graph) { |evia, evoa|
+        evi = vertex_id(vi)
+        evoa.each { |evo| yield [vertex_label_by_id(evi), e, vertex_label_by_id(evo)] } if (evia.include? evi)
+      }
     elsif (vi.class != Symbol) && (e.class != Symbol) && (vo.class != Symbol)
-      []
+      adjacencies(edge_id(e), 'vertices_in', 'vertices_out', graph) { |evia, evoa|
+        yield [vi, e, vo] if (evia.include? vertex_id(vi)) && (evoa.include? vertex_id(vo))
+      }
     end
   end
 
@@ -232,9 +232,8 @@ class Rdesiak
 
   def id(label, type)
     sha1 = Digest::SHA1.new
-    sha1.update type
     sha1.update label
-    sha1.to_s
+    type + '-' + sha1.to_s
   end
 
   def all_edges
@@ -279,7 +278,10 @@ class TestRdesiak < Test::Unit::TestCase
   end
  
   def test_edges_out
-    assert_equal(["90cf08184acf361f64728155b9b00428fc5f49be", "987026b8ad565b983bb9035d6dec5f9b6d0cc6a7", "9e7f54df18d596f0e1b89ddacb450a67d0e37478", "2eb2812677abb08dd6ac711ae4e3fba1bc8f2532"], @rd.edges_out('main'))
+    assert_equal(["edge-b6589fc6ab0dc82cf12099d1c2d40ab994e8410c",
+ "edge-da4b9237bacccdf19c0760cab7aec4a8359010b0",
+ "edge-77de68daecd823babbb58edb1c8e14d7106e83bb",
+ "edge-902ba3cda1883801594b6e1b452790cc53948fda"], @rd.edges_out('main'))
   end
  
   def test_edges_in
@@ -287,11 +289,11 @@ class TestRdesiak < Test::Unit::TestCase
   end
 
   def test_vertices_out
-    assert_equal(["bfa2ea05df6920510b285bf0cfdd23440299cfc8"], @rd.vertices_out('4'))
+    assert_equal(["vertex-132aac8d60d18ce3cefd7562f58b62f87350132b"], @rd.vertices_out('4'))
   end
 
   def test_vertices_in
-    assert_equal(["46771b5713e9494b0556dc1e52a67117b901d23c"], @rd.vertices_in('4'))
+    assert_equal(["vertex-39ae89e0a135945a5e08d9340cd2eac771f228f6"], @rd.vertices_in('4'))
   end
 
   def test_has_triple
@@ -319,17 +321,28 @@ class TestRdesiak < Test::Unit::TestCase
       c += 1
     }
     assert_equal(2, c)
+    c = 0
     @rd.query?([[:s, '5', :o]]) { |triple|
       assert_equal(["execute", "5", "printf"], triple)
+      c += 1
     }
+    assert_equal(1, c)
+    c = 0
     @rd.query?([['main', '2', :o]]) { |triple|
       assert_equal(["main", "2", "init"], triple)
+      c += 1
     }
+    assert_equal(1, c)
+    c = 0
     @rd.query?([['main', :p, 'cleanup']]) { |triple|
       assert_equal(["main", "3", "cleanup"], triple)
+      c += 1
     }
+    assert_equal(1, c)
+    c = 0
     @rd.query?([['main', :p, 'printf']]) { |tripel|
       assert_equal(["main", "7", "printf"], tripel)
+      c += 1
     }
     c = 0
     @rd.query?([['main', :p, :o]]) { |tripel|
@@ -337,9 +350,33 @@ class TestRdesiak < Test::Unit::TestCase
       c += 1
     }
     assert_equal(4, c)
+    c = 0
     @rd.query?([[:s, '6', 'make_string']]) { |tripel|
       assert_equal(["init", "6", "make_string"], tripel)
+      c += 1
     }
+    assert_equal(1, c)
+    c = 0
+    @rd.query?([['main', '2', 'init']]) { |tripel| 
+      assert_equal(['main', '2', 'init'], tripel)
+      c += 1
+    }
+    assert_equal(1, c)
+    c = 0
+    @rd.query?([[:s, :p, :o]]) { |tripel|
+      assert([ ['main', '0', 'parse'],
+               ['parse', '1', 'execute'],
+               ['main', '2', 'init'],
+               ['main', '3', 'cleanup'],
+               ['execute', '4', 'make_string'],
+               ['execute', '5', 'printf'],
+               ['init', '6', 'make_string'],
+               ['main', '7', 'printf'],
+               ['execute', '8', 'compare']
+             ].include? tripel)
+      c += 1
+    }
+    assert_equal(9, c)
   end
 
 end
@@ -360,7 +397,8 @@ rd.wipedb
 #puts "query results:"
 #p rd.query?([[:s, :p, 'printf']])
 #p rd.query?([[:s, '5', :o]])
-#p rd.query?([['main', '2', :o]])
+#rd.query?([['main', '2', 'init']]) {|t| p t}
+
 #p rd.query?([['main', :p, 'printf']])
 #p rd.query?([['main', :p, :o]])
 #p rd.query?([[:s, '6', 'make_string']])
